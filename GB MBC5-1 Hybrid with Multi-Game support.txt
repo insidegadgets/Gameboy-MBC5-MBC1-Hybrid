@@ -1,5 +1,5 @@
 /*
- Gameboy MBC5/MBC1 Hybrid with Multi-Game support
+ Gameboy MBC5/MBC1 Hybrid with Multi-Game support (For 2MB ROM and 128KB SRAM)
  Firmware: R2
  Author: Alex from insideGadgets (www.insidegadgets.com)
  Created: 7/11/2018
