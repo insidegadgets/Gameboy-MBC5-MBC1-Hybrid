@@ -1,7 +1,7 @@
 Gameboy MBC5/MBC1 Hybrid
 Author: Alex from insideGadgets (www.insidegadgets.com)
 Created: 18/04/2018
-Last Modified: 8/09/2018
+Last Modified: 20/09/2018
 License: CC-BY
 
 
@@ -19,9 +19,13 @@ Firmware R2:
 Allows this cart to be a Multi-Game Cart when you run our loader software (Multi-Game Cart Maker v1.0), drag & drop your ROM files to the executable, then write the output ROM file to the cart. It consumes 20mA more than R1 and about 10-20% of games run through the Multi-Game loader may not work. You can still run the cart as a regular Flash cart but once again it will consume 20mA more.
 MBC1 support is limited to 512KB ROM / 8 KBytes RAM, it’s locked in “ROM Banking Mode” but without the 2MB ROM support.
 
+Firmware R2.1:
+Like R2 but now CPLD is set to MBC5 by default without any MBC1/3 detection code. Use the loader to switch the CPLD to MBC1 or MBC3.
+Won't work on GB 2MB 128KB SRAM Flash Cart without modifications.
+
 
 2MB ROM, 32KB FRAM Cart
-------------------------
+-----------------------
 Firmware R1:
 MBC1 support is limited to 512KB ROM / 8 KBytes RAM, it’s locked in “ROM Banking Mode” but without the 2MB ROM support.
 
