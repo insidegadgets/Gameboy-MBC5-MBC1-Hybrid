@@ -1,0 +1,181 @@
+/*
+ Gameboy MBC5 with Multi-Game support (For 2MB ROM and 32KB FRAM)
+ Firmware: R2
+ Author: Alex from insideGadgets (www.insidegadgets.com)
+ Created: 7/11/2018
+ Last Modified: 5/10/2018
+ License: CC-BY
+ 
+ Checksum of pof file: CA97C
+ 
+ Use our Multi-Game Cart Maker program to generate the ROM file that works with this firmware.
+ By default, the MBC type is MBC5. By using the Multi-Game Cart Maker, you can load MBC1/3 games that
+ are under 2MB and the CPLD will switch to MBC1/3 mode.
+ 
+ MBC1 support is limited to 512KB ROM / 8 KBytes RAM, it’s locked in “ROM Banking Mode” but without the 2MB ROM support.
+
+*/
+
+module fram_mbc5_2mb (
+reset, clock, detectMultiReset, resetGB, 
+inputAddress, inputData, inputCE, inputWR, inputRD,
+highAddress, ramCE);
+
+// Inputs
+input reset;
+input clock;
+input [3:0] inputAddress; // a15 - a12
+input [6:0] inputData; // d6 - d0
+input inputCE;
+input inputRD;
+input inputWR;
+
+// Outputs / Registers
+output [7:0] highAddress; // a20 - a13
+reg [7:0] highAddress;
+
+reg [6:0] romBank; // a20 - a14 
+reg [1:0] ramBank; // a14 - a13 
+reg ramEnabled;
+
+output ramCE;
+reg ramCE;
+
+// Multi-game cart vars
+reg detectedWriting;
+reg [1:0] multiStage;
+reg [6:0] romBankMulti;
+reg mbc1Enabled;
+reg mbc3Enabled;
+
+input detectMultiReset;
+output resetGB;
+wire resetGB;
+reg resetGBReg;
+
+// ROM a0-a13 straight through, a14-a21 from CPLD highAddress [1:8]
+// FRAM a0-a12 straight through, a13-a14 from CPLD highAddress [0:1]
+// input RD, WR, CS straight through to ROM
+// input RD, WR, straight through to RAM, CE handled by CPLD
+// romCE to A15
+
+always @ (reset or clock or detectMultiReset or inputCE or inputRD or inputWR) begin
+	if (!detectMultiReset) begin // Reset on first boot and when resetting the Gameboy ourselves
+		resetGBReg <= 1'b1; // Turn off reset
+	end
+	if (!reset) begin // On first boot
+		highAddress <= 8'b0;
+		romBank <= 7'b1;
+		ramBank <= 2'b0;
+		ramEnabled <= 1'b0;
+		ramCE <= 1'b1;
+		
+		mbc1Enabled <= 1'b0;
+		mbc3Enabled <= 1'b0;
+		
+		// Multi-game cart
+		detectedWriting <= 1'd0;
+		multiStage <= 2'd0;
+		romBankMulti <= 7'd0;
+	end
+	else begin
+		// *** ROM Functions ***
+		// Only pass through on 0x0000-7FFF if reading or writing flash
+		if (inputAddress <= 4'd7 && (!inputRD || !inputWR)) begin
+			if (inputAddress <= 4'd3) begin // 0x0000-3FFF, Bank 0 always
+				highAddress <= romBankMulti << 1;
+			end
+			else begin
+				highAddress <= ((romBank + romBankMulti) << 1);
+			end
+		end
+		
+		// 0x2000-3FFF - Low 7 bits of ROM Bank Number (Write Only) with little MBC1 detection hack
+		if ((inputAddress == 4'd2 || (inputAddress == 4'd3 && (mbc1Enabled || mbc3Enabled))) && !inputWR && inputRD && inputCE) begin
+			if (inputData == 7'd0) begin
+				if (mbc1Enabled || mbc3Enabled) begin
+					romBank <= 1'b1;
+				end
+				else begin
+					romBank <= 1'b0;
+				end
+			end
+			else begin
+				romBank <= inputData;
+			end
+		end
+		
+		
+		// *** RAM Functions ***
+		ramCE <= 1'b1;
+		
+		// Only pass through on 0xA000-BFFF if RAM is enabled
+		if ((inputAddress == 4'hA || inputAddress == 4'hB) && ramEnabled && (!inputRD || !inputWR)) begin
+			if (clock) begin
+				ramCE <= 1'b1;
+			end
+			else begin
+				ramCE <= inputCE;
+			end
+			highAddress <= ramBank;
+		end
+	
+		// 0x0000-1FFF - RAM Enable (Write Only). 0x0A = Enable, 0x00 Disable
+		if ((inputAddress == 4'd1 || inputAddress == 4'd0) && !inputWR && inputRD && inputCE) begin
+			if (inputData == 7'hA) begin // Enable RAM
+				ramEnabled <= 1'd1;
+			end
+			else begin // Disable RAM
+				ramEnabled <= 1'd0;
+			end
+		end
+  
+		// 0x4000-5FFF - RAM Bank Number (Write Only)
+		if ((inputAddress == 4'd4 || inputAddress == 4'd5) && !inputWR && inputRD && inputCE) begin
+			if (mbc1Enabled) begin // Ignore RAM banking requests for MBC1
+			end
+			else begin
+				ramBank <= inputData[1:0];
+			end
+		end
+		
+		
+		// Detect flash cart writing (AM29F016B)
+		if ((inputAddress == 4'd0 || inputAddress == 4'd1) && inputData == 7'hAA && !inputWR && inputRD && inputCE) begin
+			detectedWriting <= 1'b1;
+		end
+		
+		
+		// Multi-game cart support - Check that we haven't detected writing and that multi-game isn't already active
+		// There are 3 stages, first load the MBC type to use, load the bank to switch to and then reset the Gameboy
+		if (!detectedWriting && multiStage <= 2'd1 && !inputWR && inputRD && inputCE) begin
+			// First stage - Check address 0x7000-7FFF for data byte or 0x63 (MBC1) or 0x64 (MBC3) or 0x65 (MBC5) 
+			if (multiStage == 2'd0 && (inputData == 7'h63 || inputData == 7'h64 || inputData == 7'h65) && inputAddress == 4'd7) begin
+				multiStage <= 2'd1;
+				if (inputData == 7'h63) begin
+					mbc1Enabled <= 1'b1;
+					mbc3Enabled <= 1'b0;
+				end
+				else if (inputData == 7'h64) begin
+					mbc1Enabled <= 1'b0;
+					mbc3Enabled <= 1'b1;
+				end
+			end
+			// Second stage - Check address 0x6000-6FFF for the bank to switch to
+			if (multiStage == 2'd1 && inputAddress == 4'd6) begin
+				romBankMulti <= inputData;
+			end
+			// Third stage - Check address 0x5000-5FFF to reboot
+			if (multiStage == 2'd1 && inputAddress == 4'd5) begin
+				multiStage <= 2'd2; // Turn off any more multi-game bank changing 
+				romBank <= 7'b1;
+				ramBank <= 2'b0;
+				resetGBReg <= 1'b0; // Reset Gameboy
+			end
+		end
+	end
+end
+
+assign resetGB = !resetGBReg;
+
+endmodule
