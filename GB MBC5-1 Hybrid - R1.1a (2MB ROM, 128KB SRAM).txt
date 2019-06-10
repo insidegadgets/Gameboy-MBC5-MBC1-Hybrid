@@ -1,0 +1,143 @@
+/*
+ Gameboy MBC5/MBC1 Hybrid (For 2MB ROM and 128KB SRAM)
+ PCB: v1.1
+ Firmware: R1.1a
+ Author: Alex from insideGadgets (www.insidegadgets.com)
+ Created: 7/11/2018
+ Last Modified: 10/06/2019
+ 
+ Note: Having some MBC1 support may break a few MBC5 games.
+ Our MBC5 implementation differs from the standard, switching to bank 0 gives bank 1 like in MBC1/3.
+ MBC1 support now allows for ROM banking mode to 2MB but for RAM banking mode it's locked to 8KB RAM.
+
+*/
+
+module sram_mbc5_2mb_v1_1 (
+reset, 
+inputAddress, inputData, inputCE, inputWR, inputRD,
+highAddress, ramCE);
+
+// Inputs
+input reset;
+input [3:0] inputAddress; // a15 - a12
+input [6:0] inputData; // d6 - d0
+input inputCE;
+input inputRD;
+input inputWR;
+
+// Outputs / Registers
+output [7:0] highAddress; // a20 - a13
+reg [7:0] highAddress;
+
+reg [6:0] romBank; // a20 - a14 
+reg [3:0] ramBank; // a16 - a13 
+reg ramEnabled;
+
+output ramCE;
+reg ramCE;
+
+reg mbc1Detect303FOn;
+reg mbc1Detected607F;
+reg mbc3or5Locked;
+reg mbc1RomRamSelect;
+
+// ROM a0-a13 straight through, a14-a21 from CPLD highAddress [1:8]
+// RAM a0-a12 straight through, a13-a16 from CPLD highAddress [0:3]
+// input RD, WR, CS straight through to ROM
+// input RD, WR, straight through to RAM, CE handled by CPLD
+// romCE to A15
+
+always @ (reset or inputCE or inputRD or inputWR) begin
+	if (!reset) begin
+		highAddress <= 8'b0;
+		romBank <= 7'b1;
+		ramBank <= 4'b0;
+		ramEnabled <= 1'b0;
+		ramCE <= 1'b1;
+		mbc1Detect303FOn <= 1'b0;
+		mbc1Detected607F <= 1'b0;
+		mbc3or5Locked <= 1'b0;
+		mbc1RomRamSelect <= 1'b0;
+	end
+	else begin
+		// *** ROM Functions ***
+		// Only pass through on 0x0000-7FFF if reading or writing flash
+		highAddress <= 8'b0;
+		if (inputAddress >= 4'd4 && inputAddress <= 4'd7) begin
+			highAddress <= (romBank << 1); // Start at a14 for ROM
+		end
+		
+		// 0x2000-3FFF - Low 7 bits of ROM Bank Number (Write Only) with little MBC1 detection hack
+		if (((inputAddress == 4'd2) || inputAddress == 4'd3 && mbc1Detect303FOn) && !inputWR) begin
+			if (inputData == 7'd0) begin // Detects MBC1 (most of the time)
+				if (mbc1Detected607F && !mbc3or5Locked && !mbc1RomRamSelect) begin // Allow for more than 512KB ROM on MBC1
+					romBank <= (romBank & 7'h60) | 7'b1;
+				end
+				else begin // For all others
+					romBank <= 1'b1;
+				end
+				mbc1Detect303FOn <= 1'b1;
+			end
+			else begin
+				if (inputData >= 7'd32) begin // Lock to MBC3/5 mode if bank switched to >= 0x20
+					mbc3or5Locked <= 1'b1;
+				end
+				
+				// MBC1 handling of ROM size
+				if (mbc1Detected607F && !mbc3or5Locked) begin
+					if (mbc1RomRamSelect) begin // 32KB RAM mode (not supported)
+						romBank <= inputData[4:0];
+					end
+					else begin // Up to 2MB ROM Mode
+						romBank <= (romBank & 7'h60) | inputData[4:0];
+					end
+				end
+				else begin // MBC 2/3/5
+					romBank <= inputData;
+				end
+			end
+		end
+		
+		
+		
+		// *** RAM Functions ***
+	   ramCE <= 1'b1;
+		
+		// Only pass through on 0xA000-BFFF if RAM is enabled
+		if ((inputAddress == 4'hA || inputAddress == 4'hB) && ramEnabled) begin
+			ramCE <= inputCE;
+			highAddress <= ramBank;
+		end
+	
+		// 0x0000-1FFF - RAM Enable (Write Only). 0x0A = Enable, 0x00 Disable
+		if ((inputAddress == 4'd1 || inputAddress == 4'd0) && !inputWR) begin
+			if (inputData == 7'hA) begin // Enable RAM
+				ramEnabled <= 1'd1;
+			end
+			else begin // Disable RAM
+				ramEnabled <= 1'd0;
+			end
+		end
+  
+		// 0x4000-5FFF - RAM Bank Number (Write Only)
+		if ((inputAddress == 4'd4 || inputAddress == 4'd5) && !inputWR) begin
+			if (mbc1Detected607F && !mbc3or5Locked) begin // MBC1 ROM size handling, ignores RAM banking request
+				if (!mbc1RomRamSelect) begin
+					romBank <= (romBank & 7'h1F) | (inputData[1:0] << 5);
+				end
+			end
+			else begin // Allow access to all RAM banks for regular MBC 3/5 carts
+				ramBank <= inputData[3:0];
+			end
+		end
+		
+		// 0x6000-7FFF - MBC1 ROM/RAM Mode Detection
+		if ((inputAddress == 4'd6 || inputAddress == 4'd7) && !inputWR) begin
+			mbc1Detect303FOn <= 1'b1;
+			mbc1Detected607F <= 1'b1;
+			mbc1RomRamSelect <= inputData[0:0];
+		end
+	end
+end
+
+endmodule
